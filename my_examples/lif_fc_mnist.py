@@ -5,7 +5,10 @@ import torch.nn.functional as F
 import torch.utils.data as data
 import torchvision
 import numpy as np
-from spikingjelly.clock_driven import neuron, encoding, functional
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from spikingjelly.clock_driven import neuron, encoding
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -23,6 +26,33 @@ parser.add_argument('-T', '--timesteps', default=100, type=int, dest='T', help='
 parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float, metavar='LR', help='学习率，例如“1e-3”\n Learning rate, e.g., "1e-3": ', dest='lr')
 parser.add_argument('--tau', default=2.0, type=float, help='LIF神经元的时间常数tau，例如“100.0”\n Membrane time constant, tau, for LIF neurons, e.g., "100.0"')
 parser.add_argument('-N', '--epoch', default=100, type=int, help='训练epoch，例如“100”\n Training epoch, e.g., "100"')
+
+def reset_net(net: nn.Module):
+    '''
+    * :ref:`API in English <reset_net-en>`
+
+    .. _reset_net-cn:
+
+    :param net: 任何属于 ``nn.Module`` 子类的网络
+
+    :return: None
+
+    将网络的状态重置。做法是遍历网络中的所有 ``Module``，若含有 ``reset()`` 函数，则调用。
+
+    * :ref:`中文API <reset_net-cn>`
+
+    .. _reset_net-en:
+
+    :param net: Any network inherits from ``nn.Module``
+
+    :return: None
+
+    Reset the whole network.  Walk through every ``Module`` and call their ``reset()`` function if exists.
+    '''
+    for m in net.modules():
+        if hasattr(m, 'reset'):
+            m.reset()
+
 
 
 def main():
@@ -105,7 +135,7 @@ def main():
     test_accs = []
     train_accs = []
 
-    
+    """
 
     for epoch in range(train_epoch):
         print("Epoch {}:".format(epoch))
@@ -137,7 +167,7 @@ def main():
             loss.backward()
             optimizer.step()
             # 优化一次参数后，需要重置网络的状态，因为SNN的神经元是有“记忆”的
-            functional.reset_net(net)
+            reset_net(net)
 
             # 正确率的计算方法如下。认为输出层中脉冲发放频率最大的神经元的下标i是分类结果
             train_correct_sum += (out_spikes_counter_frequency.max(1)[1] == label.to(device)).float().sum().item()
@@ -166,7 +196,7 @@ def main():
 
                 test_correct_sum += (out_spikes_counter.max(1)[1] == label.to(device)).float().sum().item()
                 test_sum += label.numel()
-                functional.reset_net(net)
+                reset_net(net)
             test_accuracy = test_correct_sum / test_sum
             writer.add_scalar('test_accuracy', test_accuracy, epoch)
             test_accs.append(test_accuracy)
@@ -177,7 +207,7 @@ def main():
     # 保存模型
     torch.save(net, model_output_dir + "/lif_snn_mnist.ckpt")
     
-    
+   """
 
     # 读取模型
     net = torch.load(model_output_dir + "/lif_snn_mnist.ckpt")
@@ -192,18 +222,18 @@ def main():
         for t in range(T):
             if t == 0:
                 out_spikes_counter = net(encoder(img).float())
-                # 存为onnx
-                export_onnx_file = "snn_lif.onnx"# 目的ONNX文件名
-                torch.onnx.export(net,
-                        encoder(img).float(),
-                        export_onnx_file,
-                        opset_version=11,
-                        do_constant_folding=True,	# 是否执行常量折叠优化
-                        input_names=["input"],	# 输入名
-                        output_names=["output"],	# 输出名
-                        dynamic_axes={"input":{0:"batch_size"},  # 批处理变量
-                                        "output":{0:"batch_size"}}
-                        )      
+                # # 存为onnx
+                # export_onnx_file = "snn_lif.onnx"# 目的ONNX文件名
+                # torch.onnx.export(net,
+                #         encoder(img).float(),
+                #         export_onnx_file,
+                #         opset_version=11,
+                #         do_constant_folding=True,	# 是否执行常量折叠优化
+                #         input_names=["input"],	# 输入名
+                #         output_names=["output"],	# 输出名
+                #         dynamic_axes={"input":{0:"batch_size"},  # 批处理变量
+                #                         "output":{0:"batch_size"}}
+                #         )      
 
             else:
                 out_spikes_counter += net(encoder(img).float())

@@ -5,24 +5,96 @@ import torch.nn.functional as F
 import torch.utils.data as data
 import torchvision
 import numpy as np
-from spikingjelly.clock_driven import neuron, encoding, functional
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from spikingjelly.clock_driven import neuron, encoding
+# from spikingjelly.clock_driven.functional import reset_net
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+from ops_pace import onn_fc, onn_offset, onn_octal
+
+def reset_net(net: nn.Module):
+    '''
+    * :ref:`API in English <reset_net-en>`
+
+    .. _reset_net-cn:
+
+    :param net: 任何属于 ``nn.Module`` 子类的网络
+
+    :return: None
+
+    将网络的状态重置。做法是遍历网络中的所有 ``Module``，若含有 ``reset()`` 函数，则调用。
+
+    * :ref:`中文API <reset_net-cn>`
+
+    .. _reset_net-en:
+
+    :param net: Any network inherits from ``nn.Module``
+
+    :return: None
+
+    Reset the whole network.  Walk through every ``Module`` and call their ``reset()`` function if exists.
+    '''
+    for m in net.modules():
+        if hasattr(m, 'reset'):
+            m.reset()
+
+
+class Model(torch.nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+
+        # 卷积层
+        # self.conv1 = onn_conv2d(1, 32)
+        # self.conv2 = onn_conv2d(32, 64)
+
+        # 全连接层
+        self.fc1 = onn_fc(28*28, 512)
+        # self.fc1 =  nn.Linear(28 * 28, 10)
+        self.lif1 = neuron.LIFNode(tau=2.0)
+        self.fc2 = onn_fc(512, 10)
+        # self.fc2 = nn.Linear(1024, 10)
+        self.lif2 = neuron.LIFNode(tau=2.0)
+
+
+        # self.onn_binary = onn_binary.apply
+        self.onn_offest = onn_offset.apply
+        self.onn_octal = onn_octal.apply
+
+
+    def forward(self, x):        
+
+        x = torch.flatten(x, 1)
+
+        out_bin = self.onn_octal(x)
+        out = self.fc1(out_bin)
+        out = self.onn_offest(out)
+        out = self.lif1(out)
+
+        # out = self.onn_octal(out)
+        out = self.fc2(out)
+        out = self.onn_offest(out)
+        out = self.lif2(out)
+
+
+        return out
 
 parser = argparse.ArgumentParser(description='spikingjelly LIF MNIST Training')
 
-parser.add_argument('--device', default='cuda:0', help='运行的设备，例如“cpu”或“cuda:0”\n Device, e.g., "cpu" or "cuda:0"')
+parser.add_argument('--device', default='cpu', help='运行的设备，例如“cpu”或“cuda:0”\n Device, e.g., "cpu" or "cuda:0"')
 
 parser.add_argument('--dataset-dir', default='./', help='保存MNIST数据集的位置，例如“./”\n Root directory for saving MNIST dataset, e.g., "./"')
 parser.add_argument('--log-dir', default='./', help='保存tensorboard日志文件的位置，例如“./”\n Root directory for saving tensorboard logs, e.g., "./"')
 parser.add_argument('--model-output-dir', default='./', help='模型保存路径，例如“./”\n Model directory for saving, e.g., "./"')
 
-parser.add_argument('-b', '--batch-size', default=64, type=int, help='Batch 大小，例如“64”\n Batch size, e.g., "64"')
-parser.add_argument('-T', '--timesteps', default=100, type=int, dest='T', help='仿真时长，例如“100”\n Simulating timesteps, e.g., "100"')
+parser.add_argument('-b', '--batch-size', default=128, type=int, help='Batch 大小，例如“64”\n Batch size, e.g., "64"')
+parser.add_argument('-T', '--timesteps', default=10, type=int, dest='T', help='仿真时长，例如“100”\n Simulating timesteps, e.g., "100"')
 parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float, metavar='LR', help='学习率，例如“1e-3”\n Learning rate, e.g., "1e-3": ', dest='lr')
 parser.add_argument('--tau', default=2.0, type=float, help='LIF神经元的时间常数tau，例如“100.0”\n Membrane time constant, tau, for LIF neurons, e.g., "100.0"')
-parser.add_argument('-N', '--epoch', default=100, type=int, help='训练epoch，例如“100”\n Training epoch, e.g., "100"')
+parser.add_argument('-N', '--epoch', default=10, type=int, help='训练epoch，例如“100”\n Training epoch, e.g., "100"')
 
 
 def main():
@@ -89,11 +161,12 @@ def main():
     )
 
     # 定义并初始化网络
-    net = nn.Sequential(
-        nn.Flatten(),
-        nn.Linear(28 * 28, 10, bias=False),
-        neuron.LIFNode(tau=tau)
-    )
+    # net = nn.Sequential(
+    #     nn.Flatten(),
+    #     nn.Linear(28 * 28, 10, bias=False),
+    #     neuron.LIFNode(tau=tau)
+    # )
+    net = Model()
     net = net.to(device)
     # 使用Adam优化器
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
@@ -105,8 +178,7 @@ def main():
     test_accs = []
     train_accs = []
 
-    
-
+    """
     for epoch in range(train_epoch):
         print("Epoch {}:".format(epoch))
         print("Training...")
@@ -137,7 +209,7 @@ def main():
             loss.backward()
             optimizer.step()
             # 优化一次参数后，需要重置网络的状态，因为SNN的神经元是有“记忆”的
-            functional.reset_net(net)
+            reset_net(net)
 
             # 正确率的计算方法如下。认为输出层中脉冲发放频率最大的神经元的下标i是分类结果
             train_correct_sum += (out_spikes_counter_frequency.max(1)[1] == label.to(device)).float().sum().item()
@@ -166,7 +238,7 @@ def main():
 
                 test_correct_sum += (out_spikes_counter.max(1)[1] == label.to(device)).float().sum().item()
                 test_sum += label.numel()
-                functional.reset_net(net)
+                reset_net(net)
             test_accuracy = test_correct_sum / test_sum
             writer.add_scalar('test_accuracy', test_accuracy, epoch)
             test_accs.append(test_accuracy)
@@ -176,11 +248,10 @@ def main():
     
     # 保存模型
     torch.save(net, model_output_dir + "/lif_snn_mnist.ckpt")
-    
-    
-
+      
+    """    
     # 读取模型
-    net = torch.load(model_output_dir + "/lif_snn_mnist.ckpt")
+    net = torch.load(model_output_dir + "/lif_snn_mnist_2layer.ckpt")
 
 
 
@@ -191,20 +262,7 @@ def main():
         img = img.to(device)
         for t in range(T):
             if t == 0:
-                out_spikes_counter = net(encoder(img).float())
-                # 存为onnx
-                export_onnx_file = "snn_lif.onnx"# 目的ONNX文件名
-                torch.onnx.export(net,
-                        encoder(img).float(),
-                        export_onnx_file,
-                        opset_version=11,
-                        do_constant_folding=True,	# 是否执行常量折叠优化
-                        input_names=["input"],	# 输入名
-                        output_names=["output"],	# 输出名
-                        dynamic_axes={"input":{0:"batch_size"},  # 批处理变量
-                                        "output":{0:"batch_size"}}
-                        )      
-
+                out_spikes_counter = net(encoder(img).float())    
             else:
                 out_spikes_counter += net(encoder(img).float())
         out_spikes_counter_frequency = (out_spikes_counter / T).cpu().numpy()
@@ -221,5 +279,36 @@ def main():
     np.save('test_accs.npy', test_accs)
 
 
+def translate_model_weights(model_path):
+
+    def round_fcw(filters):
+        from ops_pace import opu
+        repeats = filters.shape[0] // opu.input_vector_len
+        remainder = filters.shape[0] % opu.input_vector_len
+        repeats = repeats+1 if remainder!=0 else repeats
+        w_scale_factor =(2 ** opu.bits - 1) / (filters.max() - filters.min() + 1e-9) 
+        pad_dim=opu.input_vector_len*repeats - filters.shape[0]
+
+        weight__ = np.round(filters * w_scale_factor )
+        # weight__ = np.clip(weight__, -7, 7)
+        weight__ = np.clip(weight__, -((2**(opu.bits-1))-1), ((2**(opu.bits-1))-1)) 
+
+        weight__ = weight__.astype(np.int8)
+        padded_wt = np.pad(weight__,((0,pad_dim),(0,0)),"constant",constant_values=0)
+        weight_ = padded_wt.transpose(1,0).reshape(filters.shape[1], repeats, -1).transpose(2,1,0)
+
+        return weight_
+
+    net = Model()
+    net = torch.load(model_path)
+    fc1_w=net.fc1.weight.data.numpy()
+    fc2_w=net.fc2.weight.data.numpy()
+
+    fc1w = round_fcw(fc1_w)
+    fc2w = round_fcw(fc2_w)
+
+    np.savez('lif_snn_bit4_t.npz', fc1w=fc1w.transpose(2,1,0), fc2w=fc2w.transpose(2,1,0))
+
 if __name__ == '__main__':
     main()
+    # translate_model_weights('lif_snn_mnist_2layer.ckpt')
